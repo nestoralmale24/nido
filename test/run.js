@@ -1,8 +1,7 @@
 'use strict';
 /* Pruebas de humo con jsdom: npm install && npm test
-   1) Versión Claude abierta fuera de Claude (modo local) + cartera de ejemplo
-   2) Versión Claude con base de datos simulada
-   3) Versión web instalable (modo independiente), sin servidor de brokers
+   1) Modo local + cartera de ejemplo
+   3) Versión web instalable, sin servidor de brokers
    4) Versión web con servidor de brokers simulado (Trading 212)
    5) Servidor de brokers (worker/precios.js) con Trading 212 simulado */
 const fs = require('fs');
@@ -11,7 +10,6 @@ const assert = require('assert');
 const { JSDOM } = require('jsdom');
 
 const root = path.resolve(__dirname, '..');
-const claudeHtml = fs.readFileSync(path.join(root, 'dist/nido-claude.html'), 'utf8');
 const webHtml = fs.readFileSync(path.join(root, 'docs/index.html'), 'utf8');
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -26,7 +24,6 @@ function open(html, opts = {}) {
       w.scrollTo = () => {};
       w.addEventListener('error', e => errors.push(e.message + ' ' + (e.error && e.error.stack)));
       w.console.error = (...a) => errors.push(a.join(' '));
-      if (opts.claude) w.claude = opts.claude;
       if (opts.fetch) w.fetch = opts.fetch;
     }
   });
@@ -36,8 +33,8 @@ const fire = (w, el, type) => el.dispatchEvent(new w.Event(type, { bubbles: true
 const ok = (name, cond, extra) => { assert.ok(cond, name + (extra ? ' -> ' + extra : '')); console.log('  ok  ' + name); };
 
 async function testLocalDemo() {
-  console.log('1) Versión Claude en modo local + ejemplo');
-  const { w, d, errors } = open(claudeHtml);
+  console.log('1) Modo local + ejemplo');
+  const { w, d, errors } = open(webHtml, { full: true });
   await sleep(200);
   ok('muestra el estado vacío', !!d.querySelector('.empty h2'));
   d.querySelector('[data-action="demo-on"]').click(); await sleep(100);
@@ -62,25 +59,6 @@ async function testLocalDemo() {
   fire(w, cf, 'submit'); await sleep(600);
   const M2 = w.__nido.model();
   ok('interés de 10.000 € al 2 % TAE en un año ≈ 200 €', Math.abs(M2.interest - 200) < 1.5, M2.interest.toFixed(2));
-  ok('sin errores de JavaScript', errors.length === 0, errors.join('\n'));
-  w.close();
-}
-
-async function testDbMock() {
-  console.log('2) Versión Claude con base de datos simulada (sin Yahoo)');
-  const store = new Map(); const listeners = [];
-  const emit = () => { const snap = { docs: [...store.entries()].map(([id, x]) => ({ id, data: () => JSON.parse(JSON.stringify(x)) })) }; listeners.forEach(cb => setTimeout(() => cb(snap), 5)); };
-  const claude = {
-    use: async name => {
-      if (name === 'db') return { collection: () => ({ doc: id => ({ set: async x => { store.set(id, x); emit(); }, delete: async () => { store.delete(id); emit(); } }), onSnapshot: cb => { listeners.push(cb); emit(); return () => {}; } }) };
-      if (name === 'user') return { id: async () => 'u_prueba' };
-      return null;
-    }
-  };
-  const { w, d, errors } = open(claudeHtml, { claude });
-  await sleep(300);
-  ok('conecta con la base de datos', w.__nido.S.mode === 'db');
-  // La versión de Claude no muestra la sección de brokers (solo la web instalable).
   ok('sin errores de JavaScript', errors.length === 0, errors.join('\n'));
   w.close();
 }
@@ -346,10 +324,17 @@ async function testWebBrokers() {
   ok('Trading 212 sale del patrimonio', !w.__nido.model().pos.some(p => p.a.source === 't212'), JSON.stringify(w.__nido.model().pos.map(p => p.a.name)));
   ok('el botón vuelve a decir Conectar', d.querySelector('#proxyBtn').textContent === 'Conectar');
   ok('el estado global sigue Conectado por Trade Republic', d.querySelector('#brokerState').textContent.trim() === 'Conectado');
-  // Reconectar en un solo clic: pon la dirección y envía.
+  // Desconectar olvida también la clave de acceso, el servidor y los campos: como si nunca se hubiera configurado.
+  const savedProxy = JSON.parse(w.localStorage.getItem('cartera.broker.v1') || 'null');
+  ok('al desconectar no queda la clave de acceso guardada', !savedProxy || (!savedProxy.key && !savedProxy.url), JSON.stringify(savedProxy));
+  ok('al desconectar se vacían la dirección y la clave del formulario', d.querySelector('#px-url').value === '' && d.querySelector('#px-key').value === '');
+  // Reconectar: hay que escribir de nuevo dirección y clave.
   const pxEl = d.querySelector('#px-url');
   pxEl.value = 'https://brokers.test';
-  fire(w, d.querySelector('form[data-form="proxy"]'), 'submit'); await sleep(150);
+  d.querySelector('#px-key').value = 'topsecret';
+  fire(w, d.querySelector('form[data-form="proxy"]'), 'submit');
+  ok('al pulsar Conectar sale el spinner de Nido', !!d.querySelector('#proxyBtn .nspin') && /Conectando/.test(d.querySelector('#proxyBtn').textContent));
+  await sleep(150);
   ok('al reconectar vuelve Trading 212', /Conectado/.test(d.querySelector('#t212Body').textContent) && /Apple Inc/.test(d.querySelector('#t212Body').textContent), d.querySelector('#t212Body').textContent.slice(0, 160));
   ok('el botón vuelve a decir Desconectar', d.querySelector('#proxyBtn').textContent === 'Desconectar');
   // Y con Trade Republic: el botón Quitar borra sus datos y su caché.
@@ -364,6 +349,14 @@ async function testWebBrokers() {
   fire(w, d.querySelector('form[data-form="proxy"]'), 'submit'); await sleep(60); // desconectar Trading 212 también
   ok('el estado global dice No conectado sin proveedores', d.querySelector('#brokerState').textContent.trim() === 'No conectado');
   ok('el punto de estado es rojo', d.querySelector('#brokerDot').style.background === 'var(--loss)');
+  // Borrar todos mis datos: no queda ninguna clave de la app en el dispositivo (salvo los registros, que tienen deshacer).
+  w.localStorage.setItem('cartera.broker.v1', JSON.stringify({ url: 'https://brokers.test', key: 'topsecret' }));
+  w.localStorage.setItem('cartera.theme.v1', JSON.stringify({ t: 'dark' }));
+  const wipeBtn = d.querySelector('[data-action="wipe"]');
+  wipeBtn.click(); wipeBtn.click(); await sleep(150);
+  const left = Object.keys(w.localStorage).filter(k => k.indexOf('cartera.') === 0 && k !== 'cartera.local.v1' && k !== 'cartera.cache.v1');
+  ok('borrar todo deja el dispositivo sin claves de la app', left.length === 0, left.join(', '));
+  ok('sin errores de JavaScript', errors.length === 0, errors.join('\n'));
   ok('sin errores de JavaScript', errors.length === 0, errors.join('\n'));
   w.close();
 }
@@ -433,7 +426,6 @@ async function testWorker() {
 
 (async () => {
   await testLocalDemo();
-  await testDbMock();
   await testWeb();
   await testWebBrokers();
   await testWorker();

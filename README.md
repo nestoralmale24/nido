@@ -12,7 +12,7 @@
 </p>
 
 > [!NOTE]
-> No runtime dependencies: **a single HTML/CSS/JavaScript file**. Works on PC, iPhone and iPad, with light and dark theme. Your data lives on your device (or in your Claude account), never on third-party servers.
+> No runtime dependencies: **a single HTML/CSS/JavaScript file**. Works on PC, iPhone and iPad, with light and dark theme. Your data lives on your device, never on third-party servers.
 
 ## ✨ Features
 
@@ -34,23 +34,13 @@
 2. **On your phone or tablet**: publish the web app to your GitHub Pages and install it as an app (see [Publish the web app](#publish-the-web-app-and-install-it-on-ipad)).
 3. **Connect your brokers (optional)**: Trading 212 with Cloudflare Workers and Trade Republic with a local server (see [Connect brokers](#connect-brokers-optional)).
 
-## 🧱 Two versions, one codebase
-
-| | Claude version | Web version (PWA) |
-|---|---|---|
-| Lives at | Artifact on claude.ai | GitHub Pages (`docs/` folder) |
-| Data | In your Claude account, synced across devices | On the device itself (browser storage) |
-| Brokers (Trading 212, Trade Republic) | No | Yes, through your Cloudflare server (configured once) |
-| Offline | No | Yes, once installed |
-| Requirements | Signed in to Claude | Any recent Safari or Chrome |
-
 The web version cannot talk directly to Trading 212 or Trade Republic: the browser blocks cross-origin requests (CORS). That is why it uses a small server in your Cloudflare account (`worker/`) as a bridge. See [Connect brokers](#connect-brokers-optional).
 
 ## 📁 Structure
 
 ```
 src/
-  page.html            Structure and styles (no doctype; Claude's publisher adds it)
+  page.html            Structure and styles 
   app.js               All the logic: data, math, plans, charts, sheets, brokers
   web/
     manifest.webmanifest
@@ -64,10 +54,9 @@ tr-server/
 wrangler.example.toml  Optional template to deploy the worker from the CLI (copy to wrangler.toml with your name)
 config.json            Your broker server address (used by the web version)
 config.example.json    Template: copy to config.json and set your URL
-scripts/build.js       Generates dist/ and docs/
+scripts/build.js       Generates docs/
 test/run.js            Smoke tests with jsdom
 docs/                  Generated web version (served by GitHub Pages)
-dist/                  Generated Claude version (git-ignored)
 ```
 
 ## 🛠️ Development
@@ -76,7 +65,7 @@ Requires Node 18 or newer.
 
 ```bash
 npm install        # only for the tests (jsdom)
-npm run build      # generates dist/nido-claude.html and docs/
+npm run build      # generates docs/
 npm test           # build + tests
 npm run serve      # serves docs/ at http://localhost:3000 and, if Bun is present, also the local Trade Republic server at :8788 (Ctrl+C stops both)
 ```
@@ -159,10 +148,6 @@ The session is saved in `~/.tr_api_cookies.json` and reused on subsequent starts
 - **"El servidor local de Trade Republic no responde"**: is it running? `cd tr-server && bun server.mjs`. It only works from the PC where it runs.
 - **Expired Trade Republic session**: pair again with the QR (Settings → Trade Republic).
 - **429 (too many requests)**: Trading 212 rate-limits the API; wait a minute and retry.
-
-## 🎨 Updating the Claude version
-
-`dist/nido-claude.html` is the file published as an artifact with the `db` and `user` capabilities (private per-user data under `data/users/<id>`). Broker access is exclusive to the web version. To republish it, ask Claude in Cowork with the artifact URL, so the same link and your data are kept.
 
 ## 🗃️ Data model
 

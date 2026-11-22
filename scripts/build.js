@@ -1,7 +1,6 @@
 'use strict';
-/* Genera las dos versiones de Nido a partir de src/:
-     dist/nido-claude.html  -> página para publicar como artefacto en Claude (datos sincronizados y precios online)
-     docs/                      -> app web instalable (PWA) para GitHub Pages: funciona sin conexión, datos en el dispositivo,
+/* Genera Nido a partir de src/:
+     docs/  -> app web instalable (PWA) para GitHub Pages: funciona sin conexión, datos en el dispositivo,
                                    precios online a través de tu servidor (worker/, dirección en config.json)
    Uso: node scripts/build.js */
 const fs = require('fs');
@@ -19,15 +18,11 @@ const MARK = /<script>\s*\/\*__APP__\*\/\s*<\/script>/;
 if (!MARK.test(page)) throw new Error('Falta el bloque <script>/*__APP__*/</script> en src/page.html');
 if (app.includes('</script')) throw new Error('src/app.js no puede contener la cadena </script');
 
-// 1) Versión Claude (el publicador de artefactos añade doctype, head y body)
-const claude = page.replace(MARK, () => '<script>\n' + app + '\n</script>');
-wr('dist/nido-claude.html', claude);
-
-// 2) Versión web instalable
+// Versión web instalable
 const cut = page.indexOf('<div class="app">');
 if (cut < 0) throw new Error('No encuentro <div class="app"> en src/page.html');
 const headPart = page.slice(0, cut).trim();
-const bodyPart = page.slice(cut).replace(MARK, () => '<script>window.NIDO_STANDALONE = true;</script>\n<script>\n' + app + '\n</script>');
+const bodyPart = page.slice(cut).replace(MARK, () => '<script>\n' + app + '\n</script>');
 const version = crypto.createHash('sha1').update(headPart + bodyPart).digest('hex').slice(0, 10);
 
 const html = `<!doctype html>
@@ -78,6 +73,5 @@ for (const f of fs.readdirSync(path.join(root, 'src/web/icons'))) cp('src/web/ic
 wr('docs/.nojekyll', '');
 
 const kb = s => (Buffer.byteLength(s) / 1024).toFixed(0) + ' KB';
-console.log('dist/nido-claude.html  ' + kb(claude));
 console.log('docs/index.html           ' + kb(html) + '  (versión ' + version + ')');
 console.log('servidor de brokers       ' + (cfg.brokerProxy || 'sin configurar (config.json)'));

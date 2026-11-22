@@ -14,7 +14,6 @@
 <link rel="icon" type="image/png" href="icons/icon-192.png">
 <style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
 <title>Nido</title>
-<meta name="claude:viewport-fit-sides" content="cover">
 <script>
 /* tema antes de pintar: preferencia guardada o del sistema */
 (function(){try{var t=null;try{var s=JSON.parse(localStorage.getItem('cartera.theme.v1')||'null');if(s&&(s.t==='dark'||s.t==='light'))t=s.t}catch(e){}
@@ -149,6 +148,10 @@ html.prv .chosen small{
 .btn[disabled]{opacity:.45;pointer-events:none}
 .btn .spin{width:14px;height:14px;border-radius:50%;border:2px solid currentColor;border-right-color:transparent;animation:spin .7s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
+.nspin{display:inline-grid;place-items:center;width:20px;height:20px;flex:none;color:currentColor}
+.nspin svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.6;transform-origin:50% 50%;animation:spin 1.1s linear infinite}
+.nspin svg .dot{fill:currentColor;stroke:none}
+.loading-box .nspin{color:var(--c-brand);width:24px;height:24px}.loading-box .nspin svg{width:24px;height:24px}
 .iconbtn{width:40px;height:40px;border-radius:var(--r-pill);border:0;background:transparent;display:grid;place-items:center;color:var(--ink-2);transition:background .15s,transform .1s}
 .iconbtn:hover{background:var(--surface-2);color:var(--ink)}
 .iconbtn:active{transform:scale(.94)}
@@ -492,7 +495,6 @@ select.field{appearance:none;-webkit-appearance:none;background-image:linear-gra
 </section>
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
-<script>window.NIDO_STANDALONE = true;</script>
 <script>
 (function () {
 'use strict';
@@ -568,11 +570,12 @@ function lastLE(arr, x) { let lo = 0, hi = arr.length - 1, r = -1; while (lo <= 
 function lsGet(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } }
 function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* almacenamiento no disponible */ } }
 const RM = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : { matches: false };
-const STANDALONE = !!window.NIDO_STANDALONE;
 /* Móvil o tableta (por dispositivo, no por ancho de ventana): ahí no se puede conectar Trade Republic, que necesita el servidor local del PC. */
 const isMobileDevice = () => /Android|iPhone|iPad|iPod|Mobi/i.test(navigator.userAgent || '') || (navigator.maxTouchPoints > 1 && /Mac/.test(navigator.platform || '')) || (window.matchMedia ? window.matchMedia('(pointer:coarse)').matches && window.matchMedia('(hover:none)').matches : false);
 const isDesk = () => window.matchMedia ? window.matchMedia('(min-width:760px)').matches : true;
 
+/* Spinner con el logo de Nido (las órbitas giran alrededor del punto). */
+const nidoSpin = () => '<span class="nspin" role="status" aria-label="Cargando"><svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="12" rx="9" ry="6.5" transform="rotate(-20 12 12)"/><ellipse cx="12" cy="12" rx="7" ry="5" transform="rotate(25 12 12)" opacity=".7"/><circle class="dot" cx="12" cy="12" r="2"/></svg></span>';
 const svgI = d => '<svg class="i" viewBox="0 0 24 24" aria-hidden="true">' + d + '</svg>';
 const IC = {
   close: svgI('<path d="M6 6l12 12M18 6L6 18"/>'),
@@ -630,99 +633,27 @@ const CATALOG = [
 ];
 
 /* =========================================================
-   Almacén: db por usuario (privado), con respaldo local
+   Almacén: los datos viven en este dispositivo (localStorage)
    ========================================================= */
 const S = {
-  mode: 'loading', docs: new Map(), demo: false, demoDocs: new Map(),
-  uid: null, col: null, unsub: null, err: null, pendingIds: new Set(), retry: new Set(), diag: [], localReason: ''
+  mode: 'loading', docs: new Map(), demo: false, demoDocs: new Map(), diag: []
 };
-const LS_CACHE = 'cartera.cache.v1', LS_LOCAL = 'cartera.local.v1', LS_UI = 'cartera.ui.v1';
-const WQ = new Map();
+const LS_LOCAL = 'cartera.local.v1', LS_UI = 'cartera.ui.v1';
 const D = () => (S.demo ? S.demoDocs : S.docs);
 const all = kind => Array.from(D().values()).filter(d => d && d.kind === kind);
 function settings() { return D().get('settings') || { id: 'settings', kind: 'settings', fx: {}, fxHist: {} }; }
 function diag(msg) { S.diag.push(new Date().toLocaleTimeString('es-ES') + '  ' + msg); if (S.diag.length > 60) S.diag.shift(); }
 
-function normDoc(s) {
-  if (s == null || typeof s !== 'object') return null;
-  if (s.exists === false) return null;
-  if (typeof s.exists === 'function' && !s.exists()) return null;
-  let d = s;
-  if (typeof s.data === 'function') d = s.data();
-  else if (s.data && typeof s.data === 'object' && !Array.isArray(s.data)) d = s.data;
-  if (!d || typeof d !== 'object') return null;
-  if (!d.id && s.id) d = Object.assign({}, d, { id: s.id });
-  return d;
-}
-function normList(s) {
-  if (!s) return [];
-  let arr = Array.isArray(s) ? s : Array.isArray(s.docs) ? s.docs : Array.isArray(s.items) ? s.items : Array.isArray(s.documents) ? s.documents : Array.isArray(s.results) ? s.results : null;
-  if (!arr && typeof s.forEach === 'function') { arr = []; s.forEach(x => arr.push(x)); }
-  if (!arr) return [];
-  return arr.map(normDoc).filter(d => d && d.id && d.kind);
-}
 function loadInto(map, docs) { map.clear(); for (const d of docs || []) if (d && d.id && d.kind) map.set(d.id, d); }
 
-async function initStore() {
-  const cl = window.claude;
-  if (!cl || typeof cl.use !== 'function') return startLocal(STANDALONE ? 'Versión independiente' : 'Abierta fuera de Claude');
-  const cache = lsGet(LS_CACHE);
-  if (cache && Array.isArray(cache.docs) && cache.docs.length) { loadInto(S.docs, cache.docs); S.mode = 'cache'; scheduleRender(); }
-  let db = null, user = null;
-  try { [db, user] = await Promise.all([cl.use('db'), cl.use('user')]); } catch (e) { diag('use() falló: ' + (e && e.message || e)); }
-  if (!db || !user) return startLocal(db ? 'Sin identidad de usuario' : 'Base de datos no disponible (¿sesión iniciada?)');
-  try { S.uid = await user.id(); } catch (e) { diag('user.id() falló'); }
-  if (!S.uid) return startLocal('Sin identidad de usuario');
-  if (cache && cache.uid && cache.uid !== S.uid) { S.docs.clear(); }
-  try { S.col = db.collection('data/users/' + S.uid); } catch (e) { diag('collection() falló: ' + (e && e.message)); return startLocal('Ruta de datos no válida'); }
-  diag('db lista');
-  subscribe();
-}
-function subscribe() {
-  const onData = snap => applyRemote(normList(snap));
-  const onErr = e => {
-    S.err = 'No pude leer tus datos guardados.';
-    diag('lectura falló: ' + (e && (e.code || e.message) || e));
-    if (S.mode !== 'db') startLocal('No se pudo leer la base de datos');
-    renderBanner();
-  };
-  try {
-    if (typeof S.col.onSnapshot === 'function') S.unsub = S.col.onSnapshot(onData, onErr);
-    else if (typeof S.col.get === 'function') S.col.get().then(onData, onErr);
-    else throw new Error('API de base de datos desconocida');
-  } catch (e) { onErr(e); }
-}
-function applyRemote(list) {
-  const first = S.mode !== 'db';
-  const busy = id => WQ.has(id) || S.pendingIds.has(id);
-  const incoming = new Map(list.map(d => [d.id, d]));
-  for (const [id, d] of incoming) if (!busy(id)) S.docs.set(id, d);
-  for (const id of Array.from(S.docs.keys())) if (!incoming.has(id) && !busy(id)) S.docs.delete(id);
-  S.mode = 'db'; S.err = null;
-  if (first) {
-    diag('primera lectura: ' + list.length + ' registros');
-    for (const id of S.pendingIds) writeDoc(id);
-    S.pendingIds.clear();
-    if (S.demo) S.needPlans = true; else runPlans();
-  }
-  cacheSave();
-  scheduleRender();
-}
-function startLocal(reason) {
+function initStore() { startLocal(); }
+function startLocal() {
   if (S.mode === 'local') return;
-  diag('modo local: ' + reason);
-  S.localReason = reason;
   const saved = lsGet(LS_LOCAL);
   loadInto(S.docs, saved && saved.docs);
   S.mode = 'local';
   runPlans();
   scheduleRender();
-}
-let cacheT = 0;
-function cacheSave() {
-  if (S.mode !== 'db') return;
-  clearTimeout(cacheT);
-  cacheT = setTimeout(() => lsSet(LS_CACHE, { uid: S.uid, docs: Array.from(S.docs.values()) }), 700);
 }
 function put(doc, quiet) {
   doc.updatedAt = Date.now();
@@ -731,54 +662,15 @@ function put(doc, quiet) {
   if (!quiet) { scheduleRender(); }
 }
 function remove(id) { D().delete(id); persist(id); scheduleRender(); }
-function persist(id) {
+function persist() {
   if (S.demo) return;
-  if (S.mode === 'local') { lsSet(LS_LOCAL, { docs: Array.from(S.docs.values()) }); return; }
-  if (S.mode !== 'db') { S.pendingIds.add(id); return; }
-  cacheSave();
-  writeDoc(id);
-}
-function writeDoc(id) {
-  const st = WQ.get(id);
-  if (st) { st.again = true; return; }
-  const me = { again: false };
-  WQ.set(id, me); setSync();
-  (async () => {
-    try {
-      do {
-        me.again = false;
-        const d = S.docs.get(id);
-        const ref = S.col.doc(id);
-        if (d) {
-          const data = clone(d);
-          try { await ref.set(data); }
-          catch (e) {
-            diag('set ' + id + ' falló: ' + (e && (e.code || e.message)));
-            if (typeof ref.update === 'function') await ref.update(data); else throw e;
-          }
-        } else {
-          await ref.delete();
-        }
-      } while (me.again);
-      S.err = null; S.retry.delete(id);
-    } catch (e) {
-      S.err = 'No se pudo guardar el último cambio.';
-      diag('escritura ' + id + ' falló: ' + (e && (e.code || '')) + ' ' + (e && e.message || e));
-      S.retry.add(id);
-    } finally {
-      WQ.delete(id); setSync(); renderBanner();
-    }
-  })();
+  lsSet(LS_LOCAL, { docs: Array.from(S.docs.values()) });
 }
 function setSync() {
   const el = $('#sync'); if (!el) return;
   let t = '', err = false;
   if (S.demo) t = 'Ejemplo';
-  else if (S.mode === 'local') t = STANDALONE ? 'En este dispositivo' : 'Solo en este navegador';
-  else if (S.mode === 'loading' || S.mode === 'cache') t = 'Conectando';
-  else if (WQ.size) t = 'Guardando';
-  else if (S.err) { t = 'Sin guardar'; err = true; }
-  else t = 'Sincronizado';
+  else if (S.mode === 'local') t = 'En este dispositivo';
   el.textContent = t; el.classList.toggle('err', err);
 }
 
@@ -1101,7 +993,7 @@ function refineTxs(a) {
   return n;
 }
 function runPlans(silent) {
-  if (!(S.demo || S.mode === 'db' || S.mode === 'local')) return 0;
+  if (!(S.demo || S.mode === 'local')) return 0;
   const t = todayEd();
   const changed = new Map();
   let count = 0;
@@ -1162,7 +1054,7 @@ const B = { proxy: '', cfgProxy: '', accessKey: '', checked: false };
 const LS_PROXY = 'cartera.broker.v1';
 const LS_T212 = 'cartera.t212.v1';
 const LS_TR = 'cartera.tr.v1';
-const brokersReady = () => STANDALONE && !S.demo && !!B.proxy;
+const brokersReady = () => !S.demo && !!B.proxy;
 
 function cleanProxy(u) {
   u = String(u || '').trim().replace(/\/+$/, '');
@@ -1171,7 +1063,6 @@ function cleanProxy(u) {
   return '';
 }
 async function initBrokers() {
-  if (!STANDALONE) { B.checked = true; return; }
   let cfg = null;
   try { const r = await fetch('config.json', { cache: 'no-cache' }); if (r.ok) cfg = await r.json(); } catch (e) { /* sin config.json */ }
   B.cfgProxy = cleanProxy(cfg && cfg.brokerProxy);
@@ -1528,19 +1419,44 @@ function discardTR() {
   TRH.by = {};
   try { localStorage.removeItem(LS_TR); localStorage.removeItem(LS_TRH); } catch (e) { /* sin almacenamiento */ }
 }
+/* Desconectar Trading 212: olvida servidor, clave de acceso y todos sus datos, como si nunca se hubiera configurado.
+   Si el repositorio trae un servidor por defecto, se deja una marca vacía para que no se reconecte solo. */
+function forgetT212() {
+  B.proxy = ''; B.accessKey = '';
+  try {
+    if (B.cfgProxy) localStorage.setItem(LS_PROXY, JSON.stringify({ url: '' }));
+    else localStorage.removeItem(LS_PROXY);
+  } catch (e) { /* sin almacenamiento */ }
+  discardT212();
+  const u = $('#px-url'); if (u) u.value = '';
+  const k = $('#px-key'); if (k) k.value = '';
+}
+/* Borrado total: quita de este dispositivo todo lo que la app guardó (menos los registros, que se borran con deshacer). */
+function wipeLocalExtras() {
+  discardT212(); discardTR();
+  B.proxy = B.cfgProxy; B.accessKey = ''; TR.localUrl = '';
+  LOGOS.map = {}; LOGOS.pending.clear(); LOGOS.wait.clear(); LOGOS.noWd.clear();
+  ISS.by = {}; ISS.tried = {};
+  Object.assign(UI, { tab: 'resumen', src: 'all', range: 182, filter: 'all', sort: 'value', histCache: null, refresh: 5, theme: 'auto', privacy: false });
+  try {
+    const keep = [LS_LOCAL];
+    for (const k of Object.keys(localStorage)) if (k.indexOf('cartera.') === 0 && keep.indexOf(k) < 0) localStorage.removeItem(k);
+  } catch (e) { /* sin almacenamiento */ }
+  applyTheme(); applyPrivacy(); renderThemeBtn(); renderRateBtn();
+}
 /* Refresca la app tras quitar un broker (el patrimonio cambia). */
 function brokersWiped() { MEMO = null; UI.histCache = null; render(true); }
 
 /* ---------- Actualización automática ---------- */
 async function autoRefreshNow() {
-  if (!STANDALONE || S.demo || UI.refresh <= 0) return;
+  if (S.demo || UI.refresh <= 0) return;
   if (B.proxy && !AR.t212 && !(T.nextRetry && Date.now() < T.nextRetry)) await loadT212(true);
   if (trLocal() && !AR.tr) await trLoadSilent();
 }
 function renderRateBtn() {
   const b = $('#refreshRateBtn');
   if (!b) return;
-  b.hidden = !STANDALONE;
+  b.hidden = false;
   b.title = 'Frecuencia de actualización automática';
   const l = $('#refreshRateLbl');
   if (l) l.textContent = UI.refresh > 0 ? UI.refresh + 's' : 'Off';
@@ -1790,10 +1706,8 @@ function renderBanner() {
   const b = $('#banner'); if (!b) return;
   let h = '';
   if (S.demo) h = '<div class="banner-in"><span>Estás viendo una cartera de ejemplo con precios inventados. No se guarda nada.</span><button class="btn sm ghost" data-action="demo-off">Salir del ejemplo</button></div>';
-  else if (S.err) h = '<div class="banner-in err"><span>' + esc(S.err) + ' Lo reintento solo en unos segundos.</span></div>';
-  else if (S.mode === 'local' && !STANDALONE) h = '<div class="banner-in warn"><span>Guardando solo en este navegador. Ábrela desde Claude con tu sesión iniciada para tener los mismos datos en el PC y en el móvil.</span></div>';
   else if (S.mode === 'local' && !lsGet('cartera.bannerOk')) h = '<div class="banner-in"><span>Tus datos se guardan en este dispositivo. Haz una copia de seguridad de vez en cuando desde Ajustes.</span><button class="btn sm ghost" data-action="banner-ok">Entendido</button></div>';
-  else if (S.mode === 'db' || S.mode === 'cache' || S.mode === 'local') {
+  else if (S.mode === 'local') {
     const M = model();
     if (M.pendN) h = '<div class="banner-in warn"><span>' + (M.pendN === 1 ? 'Hay 1 aportación' : 'Hay ' + M.pendN + ' aportaciones') + ' sin precio todavía. Se valoran a coste hasta tenerlo.</span></div>';
     else if (M.missingFx.length) h = '<div class="banner-in warn"><span>Falta el tipo de cambio ' + esc(M.missingFx.join(', ')) + ' a euros. Pon el precio en euros en la ficha del activo.</span></div>';
@@ -1809,7 +1723,7 @@ function emptyState() {
     '<p>Apunta acciones, ETFs, fondos y cripto con su precio y fecha de compra, añade tus cuentas remuneradas con su TAE y deja que los planes mensuales se apunten solos.</p>' +
     '<div class="btns"><button class="btn primary" data-action="add-inv">Añadir inversión</button><button class="btn ghost" data-action="add-cash">Añadir liquidez</button><button class="btn ghost" data-action="demo-on">Ver un ejemplo</button></div>' +
     '<div class="feat">' +
-    (STANDALONE && B.proxy ? '<div><b>Brokers en solo lectura</b><span>Consulta tu cuenta de Trading 212 y Trade Republic.</span></div>' : '<div><b>Funciona sin conexión</b><span>Instalada en la pantalla de inicio abre al momento, con o sin internet.</span></div>') +
+    (B.proxy ? '<div><b>Brokers en solo lectura</b><span>Consulta tu cuenta de Trading 212 y Trade Republic.</span></div>' : '<div><b>Funciona sin conexión</b><span>Instalada en la pantalla de inicio abre al momento, con o sin internet.</span></div>') +
     '<div><b>Planes automáticos</b><span>Elige importe y días del mes. Cada aportación se apunta sola.</span></div>' +
     '<div><b>Liquidez con intereses</b><span>Saldo, TAE e intereses generados día a día.</span></div>' +
     '</div></section>';
@@ -2917,7 +2831,6 @@ function updateBrokerState() {
   }
 }
 function brokerSection() {
-  if (!STANDALONE) return '';
   const own = lsGet(LS_PROXY);
   const status = B.proxy ? 'Conectado a ' + B.proxy.replace(/^https?:\/\//, '') + (own && own.url ? ', guardado en este dispositivo.' : ', configurado en el repositorio.') : 'Sin servidor configurado. Pega la dirección y pulsa Conectar.';
   return '<section class="sh-sec"><h3>Servidor de brokers</h3>' +
@@ -3038,9 +2951,8 @@ function t212Section() {
     '<div id="t212Body">' + renderT212Inner() + '</div></section>';
 }
 function renderT212Inner() {
-  if (!STANDALONE) return '<p class="help">Disponible solo en la app instalable (web), no en la versión de escritorio de Claude.</p>';
   if (!B.proxy) return '';
-  if (T.state === 'busy') return '<div class="loading-box" style="padding:12px 0"><span class="spin"></span>Consultando Trading 212...</div>';
+  if (T.state === 'busy') return '<div class="loading-box" style="padding:12px 0">'+nidoSpin()+'Consultando Trading 212...</div>';
   if (T.state === 'err') return '<p class="help err">' + esc(T.err) + '</p><button class="btn ghost sm" data-action="t212-load">Reintentar</button>';
   if (T.state === 'ok' || T.state === 'cached') {
     const warn = T.err ? '<div class="banner-in warn" style="margin-bottom:10px"><span>' + esc(T.err) + '</span></div>' : '';
@@ -3050,14 +2962,13 @@ function renderT212Inner() {
   return '<button class="btn primary sm" data-action="t212-load">Conectar y ver cuenta</button>';
 }
 function trSection() {
-  if (!STANDALONE || isMobileDevice()) return ''; // Trade Republic solo se conecta desde el PC
+  if (isMobileDevice()) return ''; // Trade Republic solo se conecta desde el PC
   return '<section class="sh-sec"><h3>Trade Republic</h3>' +
     '<form class="form" data-form="trurl" novalidate><input class="field" id="tr-url" name="url" inputmode="url" autocapitalize="off" autocomplete="off" spellcheck="false" value="' + esc(TR.localUrl) + '" placeholder="http://localhost:8788">' +
     '<button class="btn primary sm" id="trBtn" type="submit">' + (trLocal() ? 'Quitar' : 'Guardar') + '</button>' +
     '</form><div id="trBody">' + renderTrInner() + '</div></section>';
 }
 function renderTrInner() {
-  if (!STANDALONE) return '<p class="help">Disponible solo en la app instalable (web).</p>';
   if (!trLocal()) return '';
   if (TR.state === 'busy') return '<div class="loading-box" style="padding:12px 0"><span class="spin"></span>Conectando con Trade Republic...</div>';
   if (TR.state === 'loading') return '<div class="loading-box" role="status" style="padding:12px 0"><span class="spin"></span>Cargando tu cartera de Trade Republic…</div>';
@@ -3121,7 +3032,7 @@ function shSettings() {
     brokerSection() +
     t212Section() +
     trSection() +
-    '<section class="sh-sec"><h3>Borrar</h3><button class="btn danger" data-action="wipe">Borrar todos mis datos</button><p class="help" style="margin-top:8px">Pide un segundo toque para confirmar y se puede deshacer justo después.</p></section>';
+    '<section class="sh-sec"><h3>Borrar</h3><button class="btn danger" data-action="wipe">Borrar todos mis datos</button><p class="help" style="margin-top:8px">Borra tus registros y todo lo guardado en este dispositivo (brokers, claves, ajustes). Pide un segundo toque; solo los registros se pueden deshacer justo después.</p></section>';
 }
 
 /* =========================================================
@@ -3157,7 +3068,7 @@ ACT['add-plan'] = el => {
 ACT['add-tab'] = el => { AD.tab = el.dataset.k; if (SH.stack[0] && SH.stack[0].fn === shAdd) { SH.stack = [SH.stack[0]]; paintSheet(true); } else openAdd(AD.tab); };
 ACT['cash-mode'] = el => { AD.cashMode = el.dataset.m; paintSheet(true); };
 ACT['sheet-close'] = () => closeSheet();
-ACT['proxy-clear'] = () => { lsSet(LS_PROXY, { url: '' }); B.proxy = ''; discardT212(); brokersWiped(); toast('Servidor quitado y datos de Trading 212 borrados de este dispositivo'); renderBrokers(); };
+ACT['proxy-clear'] = () => { forgetT212(); brokersWiped(); toast('Servidor quitado y datos de Trading 212 borrados de este dispositivo'); renderBrokers(); };
 ACT['proxy-default'] = () => { try { localStorage.removeItem(LS_PROXY); } catch (e) { /* sin almacenamiento */ } B.proxy = B.cfgProxy; toast('Usando el servidor del repositorio'); renderBrokers(); };
 ACT['banner-ok'] = () => { lsSet('cartera.bannerOk', 1); renderBanner(); };
 ACT['sheet-back'] = () => sheetBack();
@@ -3277,6 +3188,7 @@ ACT.wipe = el => {
   }
   const before = Array.from(D().values()).map(d => [d.id, clone(d)]);
   for (const [id] of before) remove(id);
+  wipeLocalExtras(); brokersWiped();
   closeSheet();
   withUndo('Datos borrados', before);
 };
@@ -3341,14 +3253,14 @@ FORM.proxy = async f => {
   if (btn) btn.disabled = true;
   // Pulsó Desconectar (la dirección sigue guardada en el campo).
   if (B.proxy && cleanProxy(raw) === B.proxy) {
-    lsSet(LS_PROXY, { url: '', key: B.accessKey }); B.proxy = ''; discardT212(); brokersWiped();
+    forgetT212(); brokersWiped();
     if (btn) { btn.disabled = false; btn.textContent = 'Conectar'; }
     say('Sin servidor configurado. Pega la dirección y pulsa Conectar.');
     toast('Servidor desconectado y datos de Trading 212 borrados de este dispositivo');
     renderBrokers(); return;
   }
   if (!raw) {
-    lsSet(LS_PROXY, { url: '', key: B.accessKey }); B.proxy = ''; discardT212(); brokersWiped();
+    forgetT212(); brokersWiped();
     if (btn) { btn.disabled = false; btn.textContent = 'Conectar'; }
     say('Sin servidor configurado. Pega la dirección y pulsa Conectar.');
     toast('Servidor quitado y datos de Trading 212 borrados de este dispositivo');
@@ -3356,6 +3268,8 @@ FORM.proxy = async f => {
   }
   const url = cleanProxy(raw);
   if (!url) { say('La dirección tiene que empezar por https://', true); if (btn) btn.disabled = false; return; }
+  if (btn) btn.innerHTML = nidoSpin() + 'Conectando…';
+  say('Conectando con el servidor…');
   const prev = B.proxy;
   B.proxy = url;
   B.accessKey = key;
@@ -3365,8 +3279,8 @@ FORM.proxy = async f => {
     lsSet(LS_PROXY, { url, key });
     diag('servidor de brokers conectado');
     say('Conectado. Cargando tu cuenta de Trading 212...');
-    if (btn) { btn.disabled = false; btn.textContent = 'Desconectar'; }
     await loadT212(true); // conecta y rellena el portfolio en un solo paso
+    if (btn && btn.isConnected) { btn.disabled = false; btn.textContent = 'Desconectar'; }
     say('Conectado a ' + url.replace(/^https?:\/\//, '') + '. Trading 212 al día.');
     toast('Servidor conectado');
   } catch (e) {
@@ -3384,8 +3298,8 @@ CHANGE.proxy = (f, t) => {
   // Vaciar la dirección desconecta (y borra los datos del broker de este dispositivo).
   if (!t.value.trim()) {
     if (!B.proxy) { if (b) b.textContent = 'Conectar'; return; }
-    lsSet(LS_PROXY, { url: '' }); B.proxy = ''; discardT212(); brokersWiped();
-    const m = f.querySelector('#pxMsg');
+    forgetT212(); brokersWiped();
+    const m =f.querySelector('#pxMsg');
     if (m) { m.textContent = 'Sin servidor configurado. Pega la dirección y pulsa Conectar.'; m.classList.remove('err'); }
     if (b) b.textContent = 'Conectar';
     toast('Servidor quitado y datos de Trading 212 borrados de este dispositivo');
@@ -3613,29 +3527,24 @@ function boot() {
   const h = String(location.hash || '').slice(1);
   if (TABS.includes(h)) UI.tab = h;
   bindGlobal(); initDrag();
-  if (STANDALONE) {
-    try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) { /* sin persistencia */ }
-  }
+  try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) { /* sin persistencia */ }
   t212CacheLoad(); t212HistCacheLoad(); trCacheLoad(); trHistCacheLoad(); issCacheLoad();
-  if (STANDALONE && !trLocal()) discardTR(); // sin URL local, los datos de Trade Republic se quedan fuera
+  if (!trLocal()) discardTR(); // sin URL local, los datos de Trade Republic se quedan fuera
   render();
   initStore(); initBrokers();
-  setInterval(() => {
-    if (S.retry.size && S.mode === 'db') { const ids = Array.from(S.retry); S.retry.clear(); for (const id of ids) writeDoc(id); }
-  }, 10000);
   setInterval(() => { renderTop(); }, 60000);
-  setInterval(() => { if (S.mode === 'db' || S.mode === 'local') runPlans(); }, 30 * 60000);
+  setInterval(() => { if (S.mode === 'local') runPlans(); }, 30 * 60000);
   // Actualización automática de brokers (frecuencia configurable arriba a la derecha).
   let lastAuto = Date.now();
   setInterval(() => {
-    if (!STANDALONE || S.demo || UI.refresh <= 0) return;
+    if (S.demo || UI.refresh <= 0) return;
     if (Date.now() - lastAuto < UI.refresh * 1000) return;
     if (AR.t212 || AR.tr) return;
     lastAuto = Date.now();
     autoRefreshNow();
   }, 1000);
-  setTimeout(() => { if (STANDALONE && !S.demo) autoRefreshNow(); }, 1500);
-  document.addEventListener('visibilitychange', () => { if (!document.hidden && (S.mode === 'db' || S.mode === 'local')) { runPlans(); renderTop(); if (STANDALONE && !S.demo) autoRefreshNow(); } });
+  setTimeout(() => { if (!S.demo) autoRefreshNow(); }, 1500);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && (S.mode === 'local')) { runPlans(); renderTop(); if (!S.demo) autoRefreshNow(); } });
 }
 window.__nido = { issuerLogoUrl, calcPos, cashCalc, planDates, history, history1d, priceOn, runPlans, S, D, model };
 boot();
